@@ -1,46 +1,39 @@
 #include <Wire.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
 
-Adafruit_MPU6050 mpu;
+#define MPU_ADDR 0x68
+
+int16_t ax, ay, az;
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin(21, 22);  // SDA, SCL for ESP32
+  Wire.begin(21, 22);
 
-  if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(10);
-    }
-  }
+  // Wake up sensor
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x6B);
+  Wire.write(0);
+  Wire.endTransmission(true);
 
-  Serial.println("MPU6050 Found!");
-
-  // Optional: Set accelerometer range
-  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
-
-  // Optional: Set filter bandwidth
-  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
-
-  delay(100);
+  Serial.println("Ready");
 }
 
 void loop() {
-  sensors_event_t a, g, temp;
-  mpu.getEvent(&a, &g, &temp);
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
 
-  Serial.print("Accel X: ");
-  Serial.print(a.acceleration.x);
-  Serial.print(" m/s^2, ");
+  Wire.requestFrom(MPU_ADDR, 6, true);
 
-  Serial.print("Y: ");
-  Serial.print(a.acceleration.y);
-  Serial.print(" m/s^2, ");
+  ax = Wire.read() << 8 | Wire.read();
+  ay = Wire.read() << 8 | Wire.read();
+  az = Wire.read() << 8 | Wire.read();
 
-  Serial.print("Z: ");
-  Serial.print(a.acceleration.z);
-  Serial.println(" m/s^2");
+  // Plot-friendly output
+  Serial.print(ax);
+  Serial.print(" ");
+  Serial.print(ay);
+  Serial.print(" ");
+  Serial.println(az);
 
-  delay(200);  // adjust for faster/slower readings
+  delay(50);  // smoother graph
 }
