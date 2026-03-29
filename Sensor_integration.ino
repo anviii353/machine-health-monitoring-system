@@ -1,22 +1,28 @@
-#include <Wire.h>          // I2C communication (MPU6050)
-#include <DHT.h>           // DHT22 temperature sensor
-#include <arduinoFFT.h>    // FFT for vibration analysis
-#include <math.h>          // Math functions
+#include <Wire.h>
+#include <DHT.h>
+#include <arduinoFFT.h>
+#include <math.h>
+#include <WiFi.h>   // ADDED
+
+/******** WIFI ********/
+const char* ssid = "Mayur's A35";
+const char* password = "mayurpswd22";
+WiFiServer server(80);   // ADDED
 
 /******** FFT CONFIG ********/
-const uint16_t samples = 64;          // Number of samples for FFT
-const double samplingFrequency = 100; // Sampling frequency (Hz)
+const uint16_t samples = 64;
+const double samplingFrequency = 100;
 
-double vReal[samples]; // Real signal values
-double vImag[samples]; // Imaginary part (initially 0)
+double vReal[samples];
+double vImag[samples];
 
 ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, samples, samplingFrequency);
 
 /******** PINS ********/
 #define DHTPIN 4
 #define DHTTYPE DHT22
-#define SOUND_PIN 34      // Analog sound input
-#define MPU_ADDR 0x68     // MPU6050 I2C address
+#define SOUND_PIN 34
+#define MPU_ADDR 0x68
 
 #define GREEN_LED 13
 #define YELLOW_LED 14
@@ -24,29 +30,29 @@ ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, samples, samplingFrequ
 #define BUZZER_PIN 26
 
 /******** THRESHOLDS ********/
-const int SOUND_THRESHOLD = 1500;   // Sound trigger level
-const float TEMP_OFFSET = 0.3;      // Temp deviation from baseline
-const float FREQ_THRESHOLD = 6.0;   // Vibration frequency threshold
+const int SOUND_THRESHOLD = 1500;
+const float TEMP_OFFSET = 0.3;
+const float FREQ_THRESHOLD = 6.0;
 
 /******** OBJECT ********/
 DHT dht(DHTPIN, DHTTYPE);
 
 /******** VARIABLES ********/
-int16_t rawX, rawY, rawZ; // Raw accelerometer values
+int16_t rawX, rawY, rawZ;
 float ax, ay, az, magnitude;
 
 /******** BASELINE ********/
-float baseTemp = 0;  // Reference temperature (room)
+float baseTemp = 0;
 
 /******** STABILITY COUNTERS ********/
-int sCount = 0, tCount = 0, fCount = 0; // Avoid false triggers
+int sCount = 0, tCount = 0, fCount = 0;
 
 /******** TIMING ********/
 unsigned int sampling_period_us;
 
 void setup() {
   Serial.begin(115200);
-  Wire.begin(21, 22);  // SDA, SCL pins
+  Wire.begin(21, 22);
 
   dht.begin();
 
@@ -55,18 +61,17 @@ void setup() {
   pinMode(RED_LED, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
-  // Wake MPU6050 (disable sleep mode)
+  // Wake MPU
   Wire.beginTransmission(MPU_ADDR);
   Wire.write(0x6B);
   Wire.write(0);
   Wire.endTransmission(true);
 
-  // Calculate sampling interval for FFT
   sampling_period_us = round(1000000 * (1.0 / samplingFrequency));
 
   Serial.println("Calibrating temperature...");
 
-  // Take average of 10 readings to get baseline temp
+  // AUTO BASELINE
   for (int i = 0; i < 10; i++) {
     baseTemp += dht.readTemperature();
     delay(500);
@@ -76,23 +81,37 @@ void setup() {
   Serial.print("Baseline Temp: ");
   Serial.println(baseTemp);
 
+  // WIFI CONNECT
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  server.begin();  // START SERVER
+
   Serial.println("System Ready");
 }
 
 void loop() {
 
   /******** 1. READ TEMP + SOUND ********/
-  float tempC = dht.readTemperature();   // Read temperature
-  if (isnan(tempC)) tempC = baseTemp;    // Handle sensor error
+  float tempC = dht.readTemperature();
+  if (isnan(tempC)) tempC = baseTemp;
 
-  int soundLvl = analogRead(SOUND_PIN);  // Read sound level
+  int soundLvl = analogRead(SOUND_PIN);
 
   /******** 2. FFT SAMPLING ********/
   for (int i = 0; i < samples; i++) {
 
-    unsigned long t = micros(); // Start time for sampling
+    unsigned long t = micros();
 
-    // Read accelerometer data
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x3B);
     Wire.endTransmission(false);
@@ -104,30 +123,26 @@ void loop() {
       rawZ = Wire.read() << 8 | Wire.read();
     }
 
-    // Convert raw values to g-force
     ax = rawX / 16384.0;
     ay = rawY / 16384.0;
     az = rawZ / 16384.0;
 
-    // Calculate total vibration magnitude
     magnitude = sqrt(ax * ax + ay * ay + az * az);
 
-    vReal[i] = magnitude; // Store sample
+    vReal[i] = magnitude;
     vImag[i] = 0;
 
-    // Maintain constant sampling rate
     while (micros() - t < sampling_period_us);
   }
 
   /******** 3. FFT ********/
-  FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD); // Reduce noise
-  FFT.compute(FFT_FORWARD);                        // Perform FFT
-  FFT.complexToMagnitude();                        // Convert to magnitude
+  FFT.windowing(FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+  FFT.compute(FFT_FORWARD);
+  FFT.complexToMagnitude();
 
-  double peakFreq = FFT.majorPeak(); // Get dominant frequency
+  double peakFreq = FFT.majorPeak();
 
   /******** 4. SMART FAULT LOGIC ********/
-  // Count consecutive threshold crossings to avoid false alarms
   if (soundLvl > SOUND_THRESHOLD) sCount++; else sCount = 0;
   if (tempC > baseTemp + TEMP_OFFSET) tCount++; else tCount = 0;
   if (peakFreq > FREQ_THRESHOLD) fCount++; else fCount = 0;
@@ -137,12 +152,11 @@ void loop() {
   bool fFault = (fCount > 3);
 
   /******** 5. LED ********/
-  digitalWrite(GREEN_LED, sFault);   // Sound fault
-  digitalWrite(YELLOW_LED, tFault);  // Temp fault
-  digitalWrite(RED_LED, fFault);     // Vibration fault
+  digitalWrite(GREEN_LED, sFault);
+  digitalWrite(YELLOW_LED, tFault);
+  digitalWrite(RED_LED, fFault);
 
   /******** 6. BUZZER ********/
-  // Different patterns for different faults
   if (fFault) {
     digitalWrite(BUZZER_PIN, HIGH); delay(100);
     digitalWrite(BUZZER_PIN, LOW);  delay(100);
@@ -159,10 +173,10 @@ void loop() {
     delay(300);
   }
   else {
-    digitalWrite(BUZZER_PIN, LOW); // No fault
+    digitalWrite(BUZZER_PIN, LOW);
   }
 
-  /******** 7. SERIAL OUTPUT ********/
+  /******** 7. SERIAL ********/
   Serial.println("------ SYSTEM STATUS ------");
 
   Serial.print("Temp: ");
@@ -190,5 +204,40 @@ void loop() {
 
   Serial.println("----------------------------");
 
-  delay(200); // Small delay for stability
+  /******** 8. WIFI WEBPAGE ********/
+  WiFiClient client = server.available();
+
+  if (client) {
+    while (!client.available()) delay(1);
+    client.readStringUntil('\r');
+
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-type:text/html");
+    client.println("Connection: close");
+    client.println();
+
+    client.println("<!DOCTYPE html><html>");
+    client.println("<head><meta http-equiv='refresh' content='1'></head>");
+    client.println("<body><h2>ESP32 Monitoring</h2>");
+
+    client.print("<p>Temp: "); client.print(tempC); client.println("</p>");
+    client.print("<p>Base Temp: "); client.print(baseTemp); client.println("</p>");
+    client.print("<p>Sound: "); client.print(soundLvl); client.println("</p>");
+    client.print("<p>Freq: "); client.print(peakFreq); client.println("</p>");
+
+    client.print("<p>Status: ");
+    if (!sFault && !tFault && !fFault) client.print("NORMAL");
+    else {
+      if (fFault) client.print("VIBRATION ");
+      if (tFault) client.print("TEMP ");
+      if (sFault) client.print("SOUND ");
+    }
+    client.println("</p>");
+
+    client.println("</body></html>");
+
+    client.stop();
+  }
+
+  delay(200);
 }
