@@ -5,8 +5,8 @@
 #include <WiFi.h>         // ESP32 WiFi library for the local dashboard
 
 /******** WIFI CONFIG ********/
-const char* ssid = "Wifi name";
-const char* password = "************";
+const char* ssid = "WIFI_name";
+const char* password = "WIFI_pswd";
 WiFiServer server(80); 
 
 /******** FFT CONFIG ********/
